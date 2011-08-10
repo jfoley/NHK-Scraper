@@ -8,6 +8,36 @@ require 'sqlite3'
 require 'ruby-debug'
 require 'thread'
 
+# http://burgestrand.se/code/ruby-thread-pool/
+class Pool
+  def initialize(size)
+    @size = size
+    @jobs = Queue.new
+    @pool = Array.new(@size) do |i|
+      Thread.new do
+        Thread.current[:id] = i
+        catch(:exit) do
+          loop do
+            job, args = @jobs.pop
+            job.call(*args)
+          end
+        end
+      end
+    end
+  end
+
+  def schedule(*args, &block)
+    @jobs << [block, args]
+  end
+
+  def shutdown
+    @size.times do
+      schedule { throw :exit }
+    end
+    @pool.map(&:join)
+  end
+end
+
 class Show < ActiveRecord::Base
   has_many :episodes
 end
@@ -19,6 +49,13 @@ end
 class NHKScraper
   DB_CONF = { :adapter => 'sqlite3', :database => 'nhk_shows.sqlite3' }
   LOG_FILE = "output.log"
+  MAX_THREADS = 5
+  ROOT_PATH = '高校講座'
+
+  def initialize
+    @main_uri = URI.parse("http://www.nhk.or.jp/kokokoza/library/index.html")
+    @pool = Pool.new(MAX_THREADS)
+  end
 
   def load_database
     ActiveRecord::Base.establish_connection(DB_CONF)
@@ -36,8 +73,8 @@ class NHKScraper
           t.string :video_url
           t.integer :ep_number
           t.references :show
-          t.boolean :downloaded
-          t.boolean :converted
+          t.boolean :downloaded, :default => false
+          t.boolean :converted, :default => false
         end
       end
 
@@ -46,44 +83,42 @@ class NHKScraper
   end
 
   def get_shows
-    if Show.count == 0
-      puts "opening main URL"
-      #debugger
-      doc = Nokogiri::HTML(open(@main_uri))
-      doc.css('a').each {|node|
-        if node['href'].match(/^2010\/tv.*$/)
-          url = node['href']
-          name = node.css('img').first['alt']
-          puts "url:#{url} name:#{name}"
-          Show.create(:name => name, :url => url)
-        end
-      }
-    end
+    return unless Show.count == 0
+
+    puts "opening main URL"
+    doc = Nokogiri::HTML(open(@main_uri))
+    doc.css('a').each {|node|
+      if node['href'].match(/^2010\/tv.*$/)
+        url = node['href']
+        name = node.css('img').first['alt']
+        puts "url:#{url} name:#{name}"
+        Show.create(:name => name, :url => url)
+      end
+    }
   end
 
   def get_episodes
-    if Episode.count == 0
-      for show in Show.all
-        puts "opening show URL"
-        3.times do |x|
-          season_url = @main_uri + URI.parse(show.url)
-          if x == 0
-            season_url += "index.html"
-          else
-            season_url += "index#{x + 1}.html"
-          end
-          doc = Nokogiri::HTML(open(season_url))
-          puts "opened #{season_url}"
-
-          doc.css('a').each {|node|
-            if node['href'].match(/^.*archive.*html$/)
-              url = season_url.to_s.gsub(/index.*$/, '') + node['href'][2..-1]
-              name = node.css('span').text
-              puts "url:#{url} name:#{name}"
-              show.episodes.create(:url => url, :name => name, :downloaded => false, :ep_number => show.episodes.count + 1)
-            end
-          }
+    return unless Episode.count == 0
+    for show in Show.all
+      puts "opening show URL"
+      3.times do |x|
+        season_url = @main_uri + URI.parse(show.url)
+        if x == 0
+          season_url += "index.html"
+        else
+          season_url += "index#{x + 1}.html"
         end
+        doc = Nokogiri::HTML(open(season_url))
+        puts "opened #{season_url}"
+
+        doc.css('a').each {|node|
+          if node['href'].match(/^.*archive.*html$/)
+            url = season_url.to_s.gsub(/index.*$/, '') + node['href'][2..-1]
+            name = node.css('span').text
+            puts "url:#{url} name:#{name}"
+            show.episodes.create(:url => url, :name => name, :ep_number => show.episodes.count + 1)
+          end
+        }
       end
     end
   end
@@ -101,47 +136,49 @@ class NHKScraper
     end
   end
 
-  def download_shows
-    begin
-      Dir.mkdir('高校講座')
-    rescue Errno::EEXIST
-      # keep going...
-    end
+  def create_directory_tree
+    return if Dir.exists?(ROOT_PATH) # its already here, bail out
     
-    Dir.chdir('高校講座')
-
+    Dir.mkdir(ROOT_PATH)
     for show in Show.all
-      begin
-        Dir.mkdir(show.name)
-      rescue Errno::EEXIST
-        # keep going...
-      end
+      show_path = File.join(ROOT_PATH, show.name)
+      Dir.mkdir(show_path)
+    end
+  end
 
-      Dir.chdir(show.name) do
-        show.episodes.where(:downloaded => false).all.each do |episode|
-          video_file = "#{sprintf '%02d', episode.ep_number} - #{episode.name}.asf"
-          File.delete(video_file) if File.exists?(video_file)
-          vlc_command =  "/Applications/VLC.app/Contents/MacOS/VLC -I dummy --sout='#transcode{vcodec=WMV2,vb=1024,acodec=a52,ab=192}:standard{mux=asf,dst=#{video_file}},access=file}' #{episode.video_url} vlc://quit"
-          puts "executing: #{vlc_command}"
-          `#{vlc_command} &>#{LOG_FILE}`
-          episode.update_attribute(:downloaded, true)
-        end
+  def download_shows
+    Episode.where(:downloaded => false).all.each do |episode|
+      @pool.schedule do
+        video_file = "#{sprintf '%02d', episode.ep_number} - #{episode.name}.asf"
+        puts "scheduling: #{video_file}\n"
+        destination_path = File.join(ROOT_PATH, episode.show.name, video_file)
+        File.delete(destination_path) if File.exists?(destination_path)
+        vlc_command =  "/Applications/VLC.app/Contents/MacOS/VLC -I dummy --sout='#transcode{vcodec=WMV2,vb=1024,acodec=a52,ab=192}:standard{mux=asf,dst=#{destination_path}},access=file}' #{episode.video_url} vlc://quit"
+        puts "executing: #{vlc_command}\n"
+        `#{vlc_command} &>#{LOG_FILE}`
+        episode.update_attribute(:downloaded, true)
       end
     end
   end
 
-  def main
-    @main_uri = URI.parse("http://www.nhk.or.jp/kokokoza/library/index.html")
+  def shutdown
+    @pool.shutdown
+  end
+
+  def make_it_so
     load_database
     get_shows
     get_episodes
     get_video_urls
 
+    create_directory_tree
     download_shows
   end
 end
 
 if $0 == __FILE__
   scraper = NHKScraper.new
-  scraper.main
+  scraper.make_it_so
+
+  at_exit { scraper.shutdown }
 end
