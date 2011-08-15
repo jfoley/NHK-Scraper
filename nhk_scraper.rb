@@ -159,10 +159,37 @@ class NHKScraper
         episode.update_attribute(:downloaded, true)
       end
     end
+
+    unless Episode.where(:downloaded => false).exists?
+      puts "all videos downloaded!"
+    end
   end
 
   def shutdown
     @pool.shutdown
+  end
+
+  def recover
+    rerun = false
+
+    Dir.glob( File.join(ROOT_PATH, '**', '*') ) do |file_path|
+      if File.file?(file_path) && File.size(file_path) < 78643200
+        if episode_name = File.basename(file_path).match(/ - (.*)\.asf$/)
+          episode = Episode.where(:name => episode_name[1]).first
+          
+          unless episode.nil?
+            puts "marking episode as not downloaded: #{episode_name[1]}"
+            episode.update_attribute(:downloaded, false)
+            rerun = true
+          else
+            puts "WARNING: episode #{episode_name[1]} was not found"
+          end
+        end
+        
+      end
+    end
+
+    download_shows if rerun == true
   end
 
   def make_it_so
@@ -173,6 +200,7 @@ class NHKScraper
 
     create_directory_tree
     download_shows
+    recover
   end
 end
 
