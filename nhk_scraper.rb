@@ -191,12 +191,16 @@ class NHKScraper
 
         show_name = match[1]
         ep_number = match[2]
-        next unless show_name == "地学"
 
         input_file = file_path
         basename = File.basename(file_path, '.asf') + '.m4v' # remove the .asf and append .m4v
         output_file = File.join(File.dirname(file_path), basename)
 
+        if File.exists?(output_file) && File.size(output_path) > 78643200
+          puts "skipping #{output_file}"
+          next
+        end
+        
         handbrake_command = "HandbrakeCLI -i \"#{input_file}\" --preset=\"ipad\" -o \"#{output_file}\""
         puts "running handbrake command: #{handbrake_command}"
         `#{handbrake_command}`
