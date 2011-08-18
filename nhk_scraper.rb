@@ -54,7 +54,6 @@ class NHKScraper
 
   def initialize
     @main_uri = URI.parse("http://www.nhk.or.jp/kokokoza/library/index.html")
-    @pool = Pool.new(MAX_THREADS)
   end
 
   def load_database
@@ -137,7 +136,7 @@ class NHKScraper
   end
 
   def create_directory_tree
-    return if Dir.exists?(ROOT_PATH) # its already here, bail out
+    return if Dir.exists?(ROOT_PATH)
     
     Dir.mkdir(ROOT_PATH)
     for show in Show.all
@@ -147,8 +146,10 @@ class NHKScraper
   end
 
   def download_shows
+    pool = Pool.new(MAX_THREADS)
+
     Episode.where(:downloaded => false).all.each do |episode|
-      @pool.schedule do
+      pool.schedule do
         video_file = "#{sprintf '%02d', episode.ep_number} - #{episode.name}.asf"
         puts "scheduling: #{video_file}\n"
         destination_path = File.join(ROOT_PATH, episode.show.name, video_file)
@@ -163,33 +164,10 @@ class NHKScraper
     unless Episode.where(:downloaded => false).exists?
       puts "all videos downloaded!"
     end
-  end
 
-  def shutdown
-    @pool.shutdown
-  end
+    pool.shutdown
 
-  def recover
-    rerun = false
-
-    Dir.glob( File.join(ROOT_PATH, '**', '*') ) do |file_path|
-      if File.file?(file_path) && File.size(file_path) < 78643200
-        if episode_name = File.basename(file_path).match(/ - (.*)\.asf$/)
-          episode = Episode.where(:name => episode_name[1]).first
-          
-          unless episode.nil?
-            puts "marking episode as not downloaded: #{episode_name[1]}"
-            episode.update_attribute(:downloaded, false)
-            rerun = true
-          else
-            puts "WARNING: episode #{episode_name[1]} was not found"
-          end
-        end
-        
-      end
-    end
-
-    download_shows if rerun == true
+    recover
   end
 
   def make_it_so
@@ -199,14 +177,59 @@ class NHKScraper
     get_video_urls
 
     create_directory_tree
-    download_shows
+    # download_shows
+    convert_shows
+  end
+
+  def convert_shows
     recover
+
+    Dir.glob( File.join(ROOT_PATH, '**', '*') ) do |file_path|
+      if File.file?(file_path) && File.size(file_path) > 78643200
+        match = file_path.match(/\/(.*)\/(\d{2})/)
+        next if match.nil?
+
+        show_name = match[1]
+        ep_number = match[2]
+        next unless show_name == "地学"
+
+        input_file = file_path
+        basename = File.basename(file_path, '.asf') + '.m4v' # remove the .asf and append .m4v
+        output_file = File.join(File.dirname(file_path), basename)
+
+        handbrake_command = "HandbrakeCLI -i \"#{input_file}\" --preset=\"ipad\" -o \"#{output_file}\""
+        puts "running handbrake command: #{handbrake_command}"
+        `#{handbrake_command}`
+      end
+    end
+  end
+
+  private
+    def recover
+    rerun = false
+    episode_ids = []
+
+    Dir.glob( File.join(ROOT_PATH, '**', '*') ) do |file_path|
+      if File.file?(file_path) && File.size(file_path) < 78643200
+        match = file_path.match(/\/(.*)\/(\d{2})/)
+        next if match.nil?
+
+        show_name = match[1]
+        ep_number = match[2]
+
+        episode_ids << Episode.where(:ep_number => ep_number).joins(:show).where(:shows => {:name => show_name}).collect(&:id)
+        
+        File.delete(file_path)
+      end
+    end
+
+    puts "ids to redownload: #{episode_ids}"
+    episodes_updated = Episode.where(:id => episode_ids).update_all(:downloaded => false)
+    # download_shows if episodes_updated > 0
   end
 end
 
 if $0 == __FILE__
   scraper = NHKScraper.new
   scraper.make_it_so
-
-  at_exit { scraper.shutdown }
 end
