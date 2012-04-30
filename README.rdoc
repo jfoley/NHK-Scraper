@@ -1,7 +1,7 @@
 = NHK Scraper
 
 A little script that downloads the {NHK 高校講座}[http://www.nhk.or.jp/kokokoza/] video lectures.
-Once they are downloaded, it reencodes them in a more convenient format.
+Once they are downloaded, it re-encodes them in a more convenient format.
 
 
 == Requirements
