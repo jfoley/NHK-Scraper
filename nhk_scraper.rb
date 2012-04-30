@@ -1,4 +1,8 @@
+#!/usr/bin/env ruby
 # coding: utf-8
+
+require "rubygems"
+require "bundler/setup"
 
 require 'nokogiri'
 require 'open-uri'

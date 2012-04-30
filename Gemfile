@@ -1,0 +1,5 @@
+source "http://rubygems.org"
+gem "nokogiri"
+gem "activerecord"
+gem "debugger"
+gem "sqlite3"
