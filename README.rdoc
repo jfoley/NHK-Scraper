@@ -51,5 +51,5 @@ Both of the above tasks happen within a very simple thread pool. (which I
 found at # http://burgestrand.se/code/ruby-thread-pool/) This allows
 multiple instances of VLC or Handbrake to do their magic concurrently.
 
-=== License
-This is public domain, do whatever you want with it.
+== License
+This is public domain, use it only for good.
