@@ -5,7 +5,7 @@ require 'open-uri'
 require 'uri'
 require 'active_record'
 require 'sqlite3'
-require 'ruby-debug'
+require 'debugger'
 require 'thread'
 
 # http://burgestrand.se/code/ruby-thread-pool/
@@ -52,6 +52,7 @@ class NHKScraper
   MAX_DOWNLOAD_THREADS = 3
   MAX_CONVERT_THREADS = 2
   ROOT_PATH = '高校講座'
+  VLC_PATH = '/Applications/VLC.app/Contents/MacOS/VLC'
 
   def initialize
     @main_uri = URI.parse("http://www.nhk.or.jp/kokokoza/sitemap.html")
@@ -98,6 +99,7 @@ class NHKScraper
 
   def get_episodes
     return unless Episode.count == 0
+
     for show in Show.all
       puts "opening show URL"
       3.times do |x|
@@ -137,7 +139,7 @@ class NHKScraper
 
   def create_directory_tree
     return if Dir.exists?(ROOT_PATH)
-    
+
     Dir.mkdir(ROOT_PATH)
     for show in Show.all
       show_path = File.join(ROOT_PATH, show.name)
@@ -154,7 +156,7 @@ class NHKScraper
         puts "scheduling: #{video_file}\n"
         destination_path = File.join(ROOT_PATH, episode.show.name, video_file)
         File.delete(destination_path) if File.exists?(destination_path)
-        vlc_command =  "open -a VLC -I dummy --sout='#transcode{vcodec=WMV2,vb=1024,acodec=a52,ab=192}:standard{mux=asf,dst=#{destination_path}},access=file}' #{episode.video_url} vlc://quit"
+        vlc_command =  "#{VLC_PATH} -I dummy --sout='#transcode{vcodec=WMV2,vb=1024,acodec=a52,ab=192}:standard{mux=asf,dst=#{destination_path}},access=file}' #{episode.video_url} vlc://quit"
         puts "executing: #{vlc_command}\n"
         `#{vlc_command} &>#{LOG_FILE}`
         episode.update_attributes(:downloaded => true, :video_path => destination_path)
@@ -167,7 +169,7 @@ class NHKScraper
 
     pool.shutdown
   end
-    
+
   def convert_shows
     pool = Pool.new(MAX_CONVERT_THREADS)
 
@@ -210,8 +212,7 @@ class NHKScraper
   end
 
   private
-    def recover
-    rerun = false
+  def recover
     ids_to_download = []
     ids_to_reconvert = []
 
@@ -224,7 +225,7 @@ class NHKScraper
         ep_number = match[2]
 
         episode_ids = Episode.where(:ep_number => ep_number).joins(:show).where(:shows => {:name => show_name}).collect(&:id)
-        
+
         if match[3] == 'asf'
           ids_to_download << episode_ids
         else
