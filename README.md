@@ -1,0 +1,55 @@
+= NHK Scraper
+
+A little script that downloads the {NHK 高校講座}[http://www.nhk.or.jp/kokokoza/] video lectures.
+Once they are downloaded, it reencodes them in a more convenient format.
+
+
+== Requirements
+
+* ActiveRecord
+* Sqlite
+* Nokogiri
+* Debugger
+
+== Installation
+
+Install Bundler:
+ gem install bundler
+
+Bundle it:
+ bundle
+
+Thats it!
+
+== Usage
+Just run the script:
+ ./nhk_scraper.rb
+
+== How it works
+
+=== Scraping with Nokogiri
+The first task is to collect the URLs of all of the videos that we would
+like to download. This script uses Nokogiri to parse the index page for
+all the videos, get links to each show (and season) and then finally
+follows those links to get the URL to each episode. These URLs are then
+entered in to a sqlite database.
+
+=== Downloading Videos
+Next, the script uses VLC to download the video files. VLC needs to be
+used since the actual video content is served via Windows Media server,
+which doesn't allow a direct download. This step uses the database to
+determine which files haven't yet been downloaded, and only attempts to
+download the ones that are missing.
+
+=== Converting the Videos
+Once the videos are done downloading, they are run through Handbrake's
+CLI which converts them in to a more convenient format suitable for
+playback on iDevices or a PS3.
+
+=== Thread pool
+Both of the above tasks happen within a very simple thread pool. (which I
+found at # http://burgestrand.se/code/ruby-thread-pool/) This allows
+multiple instances of VLC or Handbrake to do their magic concurrently.
+
+=== License
+This is public domain, do whatever you want with it.
